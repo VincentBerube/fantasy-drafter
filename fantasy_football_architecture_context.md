@@ -67,7 +67,7 @@ These were decided during planning on 2026-08-04 and constrain implementation ch
 ## 6. IMPLEMENTATION LOG
 Keep this section current as work lands — it's the fastest way for an AI agent resuming this project to know what already exists vs. what's still planned. Update the status and add a dated bullet under a step when it's completed, including file paths touched.
 
-- [ ] **Database Setup** — Supabase SQL for `players` table, RLS policy, realtime publication.
+- [x] **Database Setup** — `supabase/schema.sql`: `players` table, updated_at trigger, open anon RLS policy, realtime publication. (2026-08-04) Not yet applied to a live Supabase project — user still needs to run it via SQL editor or `supabase db push`.
 - [ ] **Data Pipeline** — Python ESPN ingestion script (cookie auth, local cache, Supabase upsert).
 - [ ] **Frontend Scaffold** — Next.js app, Tailwind, base data table component with mock data.
 - [ ] **Drag-and-drop tiering** — `@hello-pangea/dnd` wired to `tier`/`overall_rank` updates.

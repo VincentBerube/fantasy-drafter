@@ -1,0 +1,15 @@
+# Python
+data-pipeline/.env
+data-pipeline/cache/
+data-pipeline/__pycache__/
+data-pipeline/.venv/
+
+# Node / Next.js (frontend not scaffolded yet, added ahead of time)
+node_modules/
+.next/
+out/
+.env.local
+
+# OS
+.DS_Store
+Thumbs.db

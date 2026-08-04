@@ -68,7 +68,7 @@ These were decided during planning on 2026-08-04 and constrain implementation ch
 Keep this section current as work lands — it's the fastest way for an AI agent resuming this project to know what already exists vs. what's still planned. Update the status and add a dated bullet under a step when it's completed, including file paths touched.
 
 - [x] **Database Setup** — `supabase/schema.sql`: `players` table, updated_at trigger, open anon RLS policy, realtime publication. (2026-08-04) Not yet applied to a live Supabase project — user still needs to run it via SQL editor or `supabase db push`.
-- [ ] **Data Pipeline** — Python ESPN ingestion script (cookie auth, local cache, Supabase upsert).
+- [x] **Data Pipeline** — `data-pipeline/ingest_espn.py`: fetches ESPN's undocumented `kona_player_info` endpoint via espn_s2/SWID cookies, caches raw + transformed data to `data-pipeline/cache/` (gitignored) before uploading, upserts to Supabase on `espn_player_id` with a partial payload so manual tier/tags/notes/is_drafted edits survive re-runs. (2026-08-04) `last_season_rank` is not populated (ESPN endpoint doesn't expose it — left null, needs a separate historical-stats source if wanted later). Not yet run against the user's real league/cookies — untested against live ESPN response shape, see warnings in the script/README if fields come back empty.
 - [ ] **Frontend Scaffold** — Next.js app, Tailwind, base data table component with mock data.
 - [ ] **Drag-and-drop tiering** — `@hello-pangea/dnd` wired to `tier`/`overall_rank` updates.
 - [ ] **Real-time sync** — client subscribes to `players` table changes, updates `is_drafted` across devices.

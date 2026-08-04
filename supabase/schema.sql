@@ -10,6 +10,7 @@ create extension if not exists "pgcrypto";
 
 create table if not exists players (
   id uuid primary key default gen_random_uuid(),
+  espn_player_id bigint unique, -- upsert key for the ingestion pipeline; null for manually-added players
   player_name text not null,
   position text not null check (position in ('QB', 'RB', 'WR', 'TE', 'K', 'DST')),
   team text,

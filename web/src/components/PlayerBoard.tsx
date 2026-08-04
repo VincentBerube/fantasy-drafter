@@ -1,0 +1,215 @@
+"use client";
+
+import { Fragment, useMemo, useState } from "react";
+import {
+  DragDropContext,
+  Draggable,
+  Droppable,
+  type DropResult,
+} from "@hello-pangea/dnd";
+import { Player, Position, POSITIONS } from "@/types/player";
+
+const TAG_STYLES: Record<string, string> = {
+  Star: "bg-amber-100 text-amber-800",
+  Target: "bg-emerald-100 text-emerald-800",
+  Sleeper: "bg-sky-100 text-sky-800",
+  Avoid: "bg-rose-100 text-rose-800",
+};
+
+function TagPill({ tag }: { tag: string }) {
+  return (
+    <span
+      className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+        TAG_STYLES[tag] ?? "bg-gray-100 text-gray-700"
+      }`}
+    >
+      {tag}
+    </span>
+  );
+}
+
+function TierDivider({ tier }: { tier: number | null }) {
+  return (
+    <div className="sticky top-0 z-10 mt-3 bg-gray-900 px-3 py-1 text-xs font-semibold tracking-wide text-white first:mt-0">
+      TIER {tier ?? "—"}
+    </div>
+  );
+}
+
+export default function PlayerBoard({
+  initialPlayers,
+}: {
+  initialPlayers: Player[];
+}) {
+  const [players, setPlayers] = useState(initialPlayers);
+  const [positionFilter, setPositionFilter] = useState<Position | "ALL">(
+    "ALL"
+  );
+  const [hideDrafted, setHideDrafted] = useState(false);
+
+  // Reordering only makes sense against the full, unfiltered list — otherwise a
+  // drag's `index` refers to a position in the filtered subset, not the
+  // underlying array, and there's no unambiguous way to map it back.
+  const isReorderable = positionFilter === "ALL" && !hideDrafted;
+
+  const visiblePlayers = useMemo(
+    () =>
+      players.filter(
+        (p) =>
+          (positionFilter === "ALL" || p.position === positionFilter) &&
+          (!hideDrafted || !p.is_drafted)
+      ),
+    [players, positionFilter, hideDrafted]
+  );
+
+  function toggleDrafted(id: string) {
+    setPlayers((prev) =>
+      prev.map((p) => (p.id === id ? { ...p, is_drafted: !p.is_drafted } : p))
+    );
+  }
+
+  function handleDragEnd(result: DropResult) {
+    if (!isReorderable || !result.destination) return;
+    const from = result.source.index;
+    const to = result.destination.index;
+    if (from === to) return;
+
+    setPlayers((prev) => {
+      const next = [...prev];
+      const [moved] = next.splice(from, 1);
+      next.splice(to, 0, moved);
+      return next.map((p, i) => ({ ...p, overall_rank: i + 1 }));
+    });
+  }
+
+  return (
+    <div className="mx-auto max-w-4xl px-3 py-4">
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        {(["ALL", ...POSITIONS] as const).map((pos) => (
+          <button
+            key={pos}
+            onClick={() => setPositionFilter(pos)}
+            className={`rounded-full px-3 py-1 text-sm font-medium transition ${
+              positionFilter === pos
+                ? "bg-gray-900 text-white"
+                : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+            }`}
+          >
+            {pos}
+          </button>
+        ))}
+        <label className="ml-auto flex items-center gap-2 text-sm text-gray-700">
+          <input
+            type="checkbox"
+            checked={hideDrafted}
+            onChange={(e) => setHideDrafted(e.target.checked)}
+            className="h-4 w-4 rounded border-gray-300"
+          />
+          Hide drafted
+        </label>
+      </div>
+
+      {!isReorderable && (
+        <p className="mb-3 text-xs text-gray-500">
+          Drag-to-reorder is disabled while filtering — switch to the ALL tab
+          with &ldquo;Hide drafted&rdquo; off to re-rank.
+        </p>
+      )}
+
+      <DragDropContext onDragEnd={handleDragEnd}>
+        <Droppable droppableId="players">
+          {(provided) => (
+            <div ref={provided.innerRef} {...provided.droppableProps}>
+              {visiblePlayers.map((player, index) => {
+                const prevPlayer = visiblePlayers[index - 1];
+                const showDivider =
+                  !prevPlayer || prevPlayer.tier !== player.tier;
+
+                return (
+                  <Fragment key={player.id}>
+                    {showDivider && <TierDivider tier={player.tier} />}
+                    <Draggable
+                      draggableId={player.id}
+                      index={index}
+                      isDragDisabled={!isReorderable}
+                    >
+                      {(provided, snapshot) => (
+                        <div
+                          ref={provided.innerRef}
+                          {...provided.draggableProps}
+                          className={`flex items-center gap-3 border-b border-gray-100 bg-white px-3 py-2 ${
+                            snapshot.isDragging ? "shadow-lg" : ""
+                          } ${player.is_drafted ? "opacity-40" : ""}`}
+                        >
+                          <span
+                            {...provided.dragHandleProps}
+                            className={`text-gray-300 ${
+                              isReorderable ? "cursor-grab" : "cursor-default"
+                            }`}
+                            aria-hidden
+                          >
+                            ⠿
+                          </span>
+
+                          <span className="w-8 shrink-0 text-sm font-semibold text-gray-400">
+                            {player.overall_rank ?? "—"}
+                          </span>
+
+                          <div className="min-w-0 flex-1">
+                            <div className="flex flex-wrap items-baseline gap-x-2">
+                              <span className="truncate font-medium text-gray-900">
+                                {player.player_name}
+                              </span>
+                              <span className="shrink-0 text-xs text-gray-500">
+                                {player.position}
+                                {player.team ? ` · ${player.team}` : ""}
+                                {player.bye_week
+                                  ? ` · BYE ${player.bye_week}`
+                                  : ""}
+                              </span>
+                            </div>
+                            {(player.tags.length > 0 || player.notes) && (
+                              <div className="mt-1 flex flex-wrap items-center gap-1">
+                                {player.tags.map((tag) => (
+                                  <TagPill key={tag} tag={tag} />
+                                ))}
+                                {player.notes && (
+                                  <span
+                                    className="truncate text-xs text-gray-500"
+                                    title={player.notes}
+                                  >
+                                    {player.notes}
+                                  </span>
+                                )}
+                              </div>
+                            )}
+                          </div>
+
+                          <span className="hidden w-14 shrink-0 text-right text-xs text-gray-500 sm:block">
+                            ADP {player.adp?.toFixed(1) ?? "—"}
+                          </span>
+
+                          <button
+                            onClick={() => toggleDrafted(player.id)}
+                            className={`shrink-0 rounded-md px-2.5 py-1 text-xs font-semibold ${
+                              player.is_drafted
+                                ? "bg-gray-100 text-gray-600 hover:bg-gray-200"
+                                : "bg-gray-900 text-white hover:bg-gray-700"
+                            }`}
+                          >
+                            {player.is_drafted ? "Undo" : "Draft"}
+                          </button>
+                        </div>
+                      )}
+                    </Draggable>
+                  </Fragment>
+                );
+              })}
+              {provided.placeholder}
+            </div>
+          )}
+        </Droppable>
+      </DragDropContext>
+    </div>
+  );
+}

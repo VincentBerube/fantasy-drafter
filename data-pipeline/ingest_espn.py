@@ -58,15 +58,33 @@ def write_cache(name: str, payload) -> None:
     print(f"  cached: {name}_latest.json (+ {name}_{ts}.json)")
 
 
+# ESPN's edge (Akamai) blocks requests that don't look like a browser — a bare
+# User-Agent isn't enough, it also wants Accept/Referer/x-fantasy-source. Without
+# these every request 302s to https://www.espn.com/fantasy/ regardless of cookies.
+# Confirmed working 2026-08-13; if ESPN tightens this further, capture the exact
+# request Chrome sends (Network tab) and diff against this.
+BROWSER_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36",
+    "Accept": "application/json, text/plain, */*",
+    "Referer": "https://fantasy.espn.com/",
+    "x-fantasy-source": "kona",
+}
+
+# fantasy.espn.com still serves the web app, but private-league API reads now
+# live on this host — fantasy.espn.com/apis/v3/... 302s even with valid cookies.
+API_HOST = "lm-api-reads.fantasy.espn.com"
+
+
 def fetch_raw_players(league_id: str, year: str, espn_s2: str, swid: str, size: int = 1000) -> list:
-    url = f"https://fantasy.espn.com/apis/v3/games/ffl/seasons/{year}/segments/0/leagues/{league_id}"
+    url = f"https://{API_HOST}/apis/v3/games/ffl/seasons/{year}/segments/0/leagues/{league_id}"
     headers = {
+        **BROWSER_HEADERS,
         "x-fantasy-filter": json.dumps({
             "players": {
                 "limit": size,
                 "sortDraftRanks": {"sortPriority": 1, "sortAsc": True, "value": "PPR"},
             }
-        })
+        }),
     }
     cookies = {"espn_s2": espn_s2, "SWID": swid}
     resp = requests.get(url, headers=headers, cookies=cookies, params={"view": "kona_player_info"}, timeout=30)
@@ -75,12 +93,13 @@ def fetch_raw_players(league_id: str, year: str, espn_s2: str, swid: str, size: 
     return data.get("players", [])
 
 
-def fetch_bye_weeks(year: str) -> dict:
+def fetch_bye_weeks(year: str, espn_s2: str, swid: str) -> dict:
     """Best-effort team -> bye week lookup. Returns {} on any unexpected shape
     rather than raising, since bye_week is a nice-to-have, not critical."""
-    url = f"https://site.api.espn.com/apis/fantasy/v2/games/ffl/seasons/{year}"
+    url = f"https://{API_HOST}/apis/v3/games/ffl/seasons/{year}"
+    cookies = {"espn_s2": espn_s2, "SWID": swid}
     try:
-        resp = requests.get(url, params={"view": "proTeamSchedules"}, timeout=30)
+        resp = requests.get(url, headers=BROWSER_HEADERS, cookies=cookies, params={"view": "proTeamSchedules"}, timeout=30)
         resp.raise_for_status()
         data = resp.json()
     except requests.RequestException as exc:
@@ -176,7 +195,7 @@ def main() -> None:
     write_cache("raw_players", raw_players)
 
     print("Fetching bye weeks...")
-    bye_weeks = fetch_bye_weeks(year)
+    bye_weeks = fetch_bye_weeks(year, espn_s2, swid)
     write_cache("bye_weeks", bye_weeks)
 
     print("Transforming...")

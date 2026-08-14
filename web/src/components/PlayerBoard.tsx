@@ -102,6 +102,36 @@ function TagPicker({
   );
 }
 
+// Tags + tag picker + note-count badge — identical in both the desktop row
+// and mobile card layouts, so it's shared rather than duplicated.
+function TagsRow({
+  player,
+  onToggleTag,
+  onSelect,
+}: {
+  player: Player;
+  onToggleTag: (player: Player, tag: string) => void;
+  onSelect: (player: Player) => void;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      {player.tags.map((tag) => (
+        <TagPill key={tag} tag={tag} onRemove={() => onToggleTag(player, tag)} />
+      ))}
+      <TagPicker player={player} onToggleTag={onToggleTag} />
+      {player.note_count > 0 && (
+        <button
+          onClick={() => onSelect(player)}
+          title={`${player.note_count} note${player.note_count === 1 ? "" : "s"}`}
+          className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700 hover:bg-blue-100"
+        >
+          📝 {player.note_count}
+        </button>
+      )}
+    </div>
+  );
+}
+
 function TierDivider({
   tier,
   onRemove,
@@ -126,16 +156,18 @@ function TierDivider({
   );
 }
 
-// Thin, mostly-invisible hover target between two rows already in the same
-// tier — clicking it inserts a new tier break at that point. Fixed height
-// (rather than growing on hover) so it doesn't shift the rows around it.
+// Thin target between two rows already in the same tier — clicking it
+// inserts a new tier break at that point. Faintly visible at rest (not
+// hover-only — touch devices don't have a reliable hover state, so a
+// hover-to-reveal affordance would be undiscoverable on mobile) and darker
+// on hover/press. Fixed height so it doesn't shift the rows around it.
 function InsertTierBreak({ onClick }: { onClick: () => void }) {
   return (
     <button
       onClick={onClick}
       aria-label="Insert a tier break here"
       title="Insert a tier break here"
-      className="flex h-3 w-full items-center justify-center text-[10px] font-semibold text-transparent hover:text-gray-400"
+      className="flex h-4 w-full items-center justify-center text-[10px] font-semibold text-gray-300 hover:text-gray-500 active:text-gray-500"
     >
       + tier break
     </button>
@@ -157,6 +189,18 @@ const PlayerRow = memo(function PlayerRow({
   onToggleTag: (player: Player, tag: string) => void;
   onSelect: (player: Player) => void;
 }) {
+  const espnRef = `ESPN #${player.overall_rank ?? "—"} · ${
+    player.adp?.toFixed(1) ?? "—"
+  }`;
+  const positionLine = `${player.position}${player.team ? ` · ${player.team}` : ""}${
+    player.bye_week ? ` · BYE ${player.bye_week}` : ""
+  }`;
+  const draftButtonClass = `shrink-0 rounded-md text-xs font-semibold ${
+    player.is_drafted
+      ? "bg-gray-100 text-gray-600 hover:bg-gray-200"
+      : "bg-gray-900 text-white hover:bg-gray-700"
+  }`;
+
   return (
     <Draggable
       draggableId={player.id}
@@ -167,81 +211,112 @@ const PlayerRow = memo(function PlayerRow({
         <div
           ref={provided.innerRef}
           {...provided.draggableProps}
-          className={`flex items-center gap-3 border-b border-gray-100 bg-white px-3 py-2 ${
+          className={`border-b border-gray-100 bg-white ${
             snapshot.isDragging ? "shadow-lg" : ""
           } ${player.is_drafted ? "opacity-40" : ""}`}
         >
-          <span
-            {...provided.dragHandleProps}
-            className={`text-gray-300 ${
-              isDragDisabled ? "cursor-default" : "cursor-grab"
-            }`}
-            aria-hidden
-          >
-            ⠿
-          </span>
-
-          <span
-            className="w-8 shrink-0 text-sm font-semibold text-gray-400"
-            title="Your rank"
-          >
-            {player.my_rank ?? player.overall_rank ?? "—"}
-          </span>
-
-          <div className="min-w-0 flex-1">
-            <button
-              onClick={() => onSelect(player)}
-              className="flex flex-wrap items-baseline gap-x-2 text-left hover:underline"
+          {/* Desktop: single dense row. Hidden below sm. */}
+          <div className="hidden items-center gap-3 px-3 py-2 sm:flex">
+            <span
+              {...provided.dragHandleProps}
+              className={`text-gray-300 ${
+                isDragDisabled ? "cursor-default" : "cursor-grab"
+              }`}
+              aria-hidden
             >
-              <span className="truncate font-medium text-gray-900">
-                {player.player_name}
-              </span>
-              <span className="shrink-0 text-xs text-gray-500">
-                {player.position}
-                {player.team ? ` · ${player.team}` : ""}
-                {player.bye_week ? ` · BYE ${player.bye_week}` : ""}
-              </span>
-            </button>
-            <div className="mt-1 flex flex-wrap items-center gap-1.5">
-              {player.tags.map((tag) => (
-                <TagPill
-                  key={tag}
-                  tag={tag}
-                  onRemove={() => onToggleTag(player, tag)}
+              ⠿
+            </span>
+
+            <span
+              className="w-8 shrink-0 text-sm font-semibold text-gray-400"
+              title="Your rank"
+            >
+              {player.my_rank ?? player.overall_rank ?? "—"}
+            </span>
+
+            <div className="min-w-0 flex-1">
+              <button
+                onClick={() => onSelect(player)}
+                className="flex flex-wrap items-baseline gap-x-2 text-left hover:underline"
+              >
+                <span className="truncate font-medium text-gray-900">
+                  {player.player_name}
+                </span>
+                <span className="shrink-0 text-xs text-gray-500">
+                  {positionLine}
+                </span>
+              </button>
+              <div className="mt-1">
+                <TagsRow
+                  player={player}
+                  onToggleTag={onToggleTag}
+                  onSelect={onSelect}
                 />
-              ))}
-              <TagPicker player={player} onToggleTag={onToggleTag} />
-              {player.note_count > 0 && (
-                <button
-                  onClick={() => onSelect(player)}
-                  title={`${player.note_count} note${
-                    player.note_count === 1 ? "" : "s"
-                  }`}
-                  className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700 hover:bg-blue-100"
-                >
-                  📝 {player.note_count}
-                </button>
-              )}
+              </div>
             </div>
+
+            <span
+              className="w-28 shrink-0 text-right text-xs text-gray-500"
+              title="ESPN's imported rank and ADP — reference only, unaffected by your drag order"
+            >
+              {espnRef}
+            </span>
+
+            <button
+              onClick={() => onToggleDrafted(player)}
+              className={`${draftButtonClass} px-2.5 py-1`}
+            >
+              {player.is_drafted ? "Undo" : "Draft"}
+            </button>
           </div>
 
-          <span
-            className="hidden w-28 shrink-0 text-right text-xs text-gray-500 sm:block"
-            title="ESPN's imported rank and ADP — reference only, unaffected by your drag order"
-          >
-            ESPN #{player.overall_rank ?? "—"} · {player.adp?.toFixed(1) ?? "—"}
-          </span>
+          {/* Mobile: condensed card, larger touch targets. Hidden at sm+. */}
+          <div className="flex flex-col gap-1.5 px-3 py-2.5 sm:hidden">
+            <div className="flex items-center gap-2">
+              <span
+                {...provided.dragHandleProps}
+                className={`shrink-0 px-1 py-1 text-gray-300 ${
+                  isDragDisabled ? "cursor-default" : "cursor-grab"
+                }`}
+                aria-hidden
+              >
+                ⠿
+              </span>
+              <span
+                className="w-7 shrink-0 text-sm font-semibold text-gray-400"
+                title="Your rank"
+              >
+                {player.my_rank ?? player.overall_rank ?? "—"}
+              </span>
+              <button
+                onClick={() => onSelect(player)}
+                className="min-w-0 flex-1 truncate text-left font-medium text-gray-900"
+              >
+                {player.player_name}
+              </button>
+              <button
+                onClick={() => onToggleDrafted(player)}
+                className={`${draftButtonClass} px-3 py-1.5`}
+              >
+                {player.is_drafted ? "Undo" : "Draft"}
+              </button>
+            </div>
 
-          <button
-            onClick={() => onToggleDrafted(player)}
-            className={`shrink-0 rounded-md px-2.5 py-1 text-xs font-semibold ${
-              player.is_drafted
-                ? "bg-gray-100 text-gray-600 hover:bg-gray-200"
-                : "bg-gray-900 text-white hover:bg-gray-700"
-            }`}
-          >
-            {player.is_drafted ? "Undo" : "Draft"}
-          </button>
+            <div className="flex items-center justify-between gap-2 pl-16 text-xs text-gray-500">
+              <span className="truncate">{positionLine}</span>
+              <span className="shrink-0" title="ESPN's imported rank and ADP">
+                {espnRef}
+              </span>
+            </div>
+
+            <div className="pl-16">
+              <TagsRow
+                player={player}
+                onToggleTag={onToggleTag}
+                onSelect={onSelect}
+              />
+            </div>
+          </div>
         </div>
       )}
     </Draggable>

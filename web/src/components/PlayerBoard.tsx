@@ -27,7 +27,15 @@ function byRank(a: Player, b: Player) {
 // pipeline also sets/clears it automatically from ESPN's injury data on each
 // run (see ingest_espn.py) — a manual add/remove here can be overwritten by
 // the next pipeline run if ESPN's status disagrees.
-const ALL_TAGS = ["Star", "Target", "Sleeper", "Avoid", "Injured"];
+const ALL_TAGS = [
+  "Star",
+  "Target",
+  "Sleeper",
+  "Avoid",
+  "Injured",
+  "Rookie",
+  "Longshot",
+];
 
 const TAG_STYLES: Record<string, string> = {
   Star: "bg-amber-100 text-amber-800",
@@ -35,6 +43,8 @@ const TAG_STYLES: Record<string, string> = {
   Sleeper: "bg-sky-100 text-sky-800",
   Avoid: "bg-rose-100 text-rose-800",
   Injured: "bg-red-100 text-red-800",
+  Rookie: "bg-violet-100 text-violet-800",
+  Longshot: "bg-orange-100 text-orange-800",
 };
 
 function TagPill({
@@ -92,11 +102,43 @@ function TagPicker({
   );
 }
 
-function TierDivider({ tier }: { tier: number | null }) {
+function TierDivider({
+  tier,
+  onRemove,
+}: {
+  tier: number | null;
+  onRemove?: () => void;
+}) {
   return (
-    <div className="sticky top-0 z-10 mt-3 bg-gray-900 px-3 py-1 text-xs font-semibold tracking-wide text-white first:mt-0">
-      TIER {tier ?? "—"}
+    <div className="sticky top-0 z-10 mt-3 flex items-center justify-between bg-gray-900 px-3 py-1 text-xs font-semibold tracking-wide text-white first:mt-0">
+      <span>TIER {tier ?? "—"}</span>
+      {onRemove && (
+        <button
+          onClick={onRemove}
+          aria-label="Remove this tier break"
+          title="Merge with the tier above"
+          className="text-gray-400 hover:text-white"
+        >
+          ×
+        </button>
+      )}
     </div>
+  );
+}
+
+// Thin, mostly-invisible hover target between two rows already in the same
+// tier — clicking it inserts a new tier break at that point. Fixed height
+// (rather than growing on hover) so it doesn't shift the rows around it.
+function InsertTierBreak({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      aria-label="Insert a tier break here"
+      title="Insert a tier break here"
+      className="flex h-3 w-full items-center justify-center text-[10px] font-semibold text-transparent hover:text-gray-400"
+    >
+      + tier break
+    </button>
   );
 }
 
@@ -385,23 +427,106 @@ export default function PlayerBoard({
     const next = [...players];
     const [moved] = next.splice(from, 1);
     next.splice(to, 0, moved);
-    // Drag only ever sets my_rank — overall_rank stays ESPN's untouched
-    // reference value, safe to refresh on the next ingestion run.
+
+    // Tiers are defined by where the breaks fall in rank order (see
+    // toggleTierBreak), so a player that gets dragged into a different tier's
+    // range needs to actually join that tier — otherwise tier would silently
+    // drift out of sync with rank order, which is the whole problem this
+    // design is meant to avoid. Only the dragged player's tier changes here;
+    // everyone else keeps theirs (dropping into a tier joins it, it doesn't
+    // shift it).
+    const neighborTier =
+      to > 0 ? next[to - 1].tier : (next[to + 1]?.tier ?? null);
+    next[to] = { ...next[to], tier: neighborTier };
+
+    // Drag sets my_rank and (for the moved player only) tier — overall_rank
+    // stays ESPN's untouched reference value, safe to refresh on the next
+    // ingestion run.
     const reranked = next.map((p, i) => ({ ...p, my_rank: i + 1 }));
     setPlayers(reranked);
 
     // Only ranks strictly between the old and new position actually changed.
+    // tier is included for the whole range too (a no-op write for everyone
+    // but the moved player) so every record in this batch has the same keys
+    // — PostgREST's bulk upsert derives its column set from the union of
+    // keys across the batch, so mixing records with/without `tier` would
+    // send literal NULLs for the ones missing it (hit this exact bug with
+    // the Injured tag in ingest_espn.py).
     const lo = Math.min(from, to);
     const hi = Math.max(from, to);
     const changed = reranked.slice(lo, hi + 1);
     Promise.all(
       changed.map((p) =>
-        supabase.from("players").update({ my_rank: p.my_rank }).eq("id", p.id)
+        supabase
+          .from("players")
+          .update({ my_rank: p.my_rank, tier: p.tier })
+          .eq("id", p.id)
       )
     ).then((results) => {
       const failed = results.filter((r) => r.error);
       if (failed.length > 0) console.error("Failed to persist ranks:", failed);
     });
+  }
+
+  function toggleTierBreak(afterGlobalIndex: number) {
+    if (!isReorderable) return;
+    if (afterGlobalIndex < 0 || afterGlobalIndex >= players.length - 1)
+      return;
+
+    // Tiers are derived, not stored as an independent choice: renumber the
+    // whole rank-ordered list from a set of break positions (index i = "a
+    // break falls right before players[i]"), toggling one break on or off,
+    // then write back only the rows whose tier number actually changed.
+    const effTier = (p: Player) => p.tier ?? 1;
+    const breakPositions = new Set<number>();
+    for (let i = 1; i < players.length; i++) {
+      if (effTier(players[i]) !== effTier(players[i - 1]))
+        breakPositions.add(i);
+    }
+
+    const breakIndex = afterGlobalIndex + 1;
+    if (breakPositions.has(breakIndex)) {
+      breakPositions.delete(breakIndex);
+    } else {
+      breakPositions.add(breakIndex);
+    }
+
+    let tier = 1;
+    const newTiers: number[] = [];
+    for (let i = 0; i < players.length; i++) {
+      if (breakPositions.has(i)) tier++;
+      newTiers.push(tier);
+    }
+
+    // supabase.upsert() compiles to INSERT ... ON CONFLICT DO UPDATE, and
+    // Postgres validates the row as insertable — including NOT NULL columns
+    // without defaults — even when it's actually going to hit the conflict/
+    // update branch. player_name/position have to ride along even though
+    // they're not changing, or this 400s with a not-null violation (hit this
+    // live before catching it: tried {id, tier} only, upsert rejected it).
+    const changes: { id: string; player_name: string; position: string; tier: number }[] = [];
+    const next = players.map((p, i) => {
+      if (p.tier !== newTiers[i]) {
+        changes.push({
+          id: p.id,
+          player_name: p.player_name,
+          position: p.position,
+          tier: newTiers[i],
+        });
+        return { ...p, tier: newTiers[i] };
+      }
+      return p;
+    });
+    setPlayers(next);
+
+    if (changes.length > 0) {
+      supabase
+        .from("players")
+        .upsert(changes, { onConflict: "id" })
+        .then(({ error }) => {
+          if (error) console.error("Failed to persist tiers:", error);
+        });
+    }
   }
 
   return (
@@ -495,13 +620,40 @@ export default function PlayerBoard({
           {(provided) => (
             <div ref={provided.innerRef} {...provided.droppableProps}>
               {pagePlayers.map((player, index) => {
-                const prevPlayer = pagePlayers[index - 1];
-                const showDivider =
-                  !prevPlayer || prevPlayer.tier !== player.tier;
+                const globalIndex = pageOffset + index;
+                // In the reorderable (unfiltered, unsearched) view, compare
+                // against the true previous player in the full list, not
+                // just the previous row on this page — otherwise the top of
+                // page 2+ would always look like a fresh break, and tier-break
+                // clicks there would target the wrong index. In a filtered/
+                // searched view tier editing isn't offered anyway, so a
+                // page-local comparison is fine for the (purely cosmetic)
+                // divider grouping.
+                const truePrev = isReorderable
+                  ? globalIndex > 0
+                    ? players[globalIndex - 1]
+                    : null
+                  : pagePlayers[index - 1];
+                const showDivider = !truePrev || truePrev.tier !== player.tier;
 
                 return (
                   <Fragment key={player.id}>
-                    {showDivider && <TierDivider tier={player.tier} />}
+                    {showDivider ? (
+                      <TierDivider
+                        tier={player.tier}
+                        onRemove={
+                          isReorderable && truePrev
+                            ? () => toggleTierBreak(globalIndex - 1)
+                            : undefined
+                        }
+                      />
+                    ) : (
+                      isReorderable && (
+                        <InsertTierBreak
+                          onClick={() => toggleTierBreak(globalIndex - 1)}
+                        />
+                      )
+                    )}
                     <PlayerRow
                       player={player}
                       index={index}

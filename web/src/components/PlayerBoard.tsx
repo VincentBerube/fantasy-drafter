@@ -9,6 +9,7 @@ import {
 } from "@hello-pangea/dnd";
 import { supabase } from "@/lib/supabase";
 import { Player, Position, POSITIONS } from "@/types/player";
+import PlayerDetailModal from "@/components/PlayerDetailModal";
 
 const PAGE_SIZE = 100;
 
@@ -86,39 +87,6 @@ function TagPicker({
   );
 }
 
-function NotesEditor({
-  player,
-  onSave,
-}: {
-  player: Player;
-  onSave: (player: Player, notes: string) => void;
-}) {
-  const [value, setValue] = useState(player.notes);
-
-  // Resync if notes change from elsewhere (another device, or our own
-  // optimistic update echoing back through realtime) — harmless when the
-  // value already matches what's typed. Adjusting state during render
-  // (rather than in an effect) per https://react.dev/learn/you-might-not-need-an-effect.
-  const [prevNotes, setPrevNotes] = useState(player.notes);
-  if (player.notes !== prevNotes) {
-    setPrevNotes(player.notes);
-    setValue(player.notes);
-  }
-
-  return (
-    <input
-      type="text"
-      value={value}
-      onChange={(e) => setValue(e.target.value)}
-      onBlur={() => {
-        if (value !== player.notes) onSave(player, value);
-      }}
-      placeholder="Add note…"
-      className="min-w-0 flex-1 border-b border-transparent bg-transparent text-xs text-gray-500 outline-none hover:border-gray-200 focus:border-gray-400"
-    />
-  );
-}
-
 function TierDivider({ tier }: { tier: number | null }) {
   return (
     <div className="sticky top-0 z-10 mt-3 bg-gray-900 px-3 py-1 text-xs font-semibold tracking-wide text-white first:mt-0">
@@ -133,14 +101,14 @@ const PlayerRow = memo(function PlayerRow({
   isDragDisabled,
   onToggleDrafted,
   onToggleTag,
-  onUpdateNotes,
+  onSelect,
 }: {
   player: Player;
   index: number;
   isDragDisabled: boolean;
   onToggleDrafted: (player: Player) => void;
   onToggleTag: (player: Player, tag: string) => void;
-  onUpdateNotes: (player: Player, notes: string) => void;
+  onSelect: (player: Player) => void;
 }) {
   return (
     <Draggable
@@ -174,7 +142,10 @@ const PlayerRow = memo(function PlayerRow({
           </span>
 
           <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-baseline gap-x-2">
+            <button
+              onClick={() => onSelect(player)}
+              className="flex flex-wrap items-baseline gap-x-2 text-left hover:underline"
+            >
               <span className="truncate font-medium text-gray-900">
                 {player.player_name}
               </span>
@@ -183,7 +154,7 @@ const PlayerRow = memo(function PlayerRow({
                 {player.team ? ` · ${player.team}` : ""}
                 {player.bye_week ? ` · BYE ${player.bye_week}` : ""}
               </span>
-            </div>
+            </button>
             <div className="mt-1 flex flex-wrap items-center gap-1.5">
               {player.tags.map((tag) => (
                 <TagPill
@@ -193,7 +164,6 @@ const PlayerRow = memo(function PlayerRow({
                 />
               ))}
               <TagPicker player={player} onToggleTag={onToggleTag} />
-              <NotesEditor player={player} onSave={onUpdateNotes} />
             </div>
           </div>
 
@@ -329,17 +299,17 @@ export default function PlayerBoard({
       });
   }, []);
 
-  const updateNotes = useCallback((player: Player, notes: string) => {
-    setPlayers((prev) =>
-      prev.map((p) => (p.id === player.id ? { ...p, notes } : p))
-    );
-    supabase
-      .from("players")
-      .update({ notes })
-      .eq("id", player.id)
-      .then(({ error }) => {
-        if (error) console.error("Failed to update notes:", error);
-      });
+  const [selectedPlayerId, setSelectedPlayerId] = useState<string | null>(
+    null
+  );
+  // Look up by id each render rather than storing the player object, so the
+  // modal reflects live updates (e.g. a tag change from another device)
+  // instead of a frozen snapshot from when it was opened.
+  const selectedPlayer =
+    players.find((p) => p.id === selectedPlayerId) ?? null;
+
+  const selectPlayer = useCallback((player: Player) => {
+    setSelectedPlayerId(player.id);
   }, []);
 
   function handleDragEnd(result: DropResult) {
@@ -456,7 +426,7 @@ export default function PlayerBoard({
                       isDragDisabled={!isReorderable}
                       onToggleDrafted={toggleDrafted}
                       onToggleTag={toggleTag}
-                      onUpdateNotes={updateNotes}
+                      onSelect={selectPlayer}
                     />
                   </Fragment>
                 );
@@ -466,6 +436,13 @@ export default function PlayerBoard({
           )}
         </Droppable>
       </DragDropContext>
+
+      {selectedPlayer && (
+        <PlayerDetailModal
+          player={selectedPlayer}
+          onClose={() => setSelectedPlayerId(null)}
+        />
+      )}
     </div>
   );
 }

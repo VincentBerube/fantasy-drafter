@@ -12,8 +12,14 @@ export interface Player {
   adp: number | null;
   last_season_rank: number | null;
   tags: string[];
-  notes: string;
   is_drafted: boolean;
+}
+
+export interface PlayerNote {
+  id: string;
+  player_id: string;
+  content: string;
+  created_at: string;
 }
 
 export const POSITIONS: Position[] = ["QB", "RB", "WR", "TE", "K", "DST"];

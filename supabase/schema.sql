@@ -46,10 +46,16 @@ create table if not exists player_notes (
   id uuid primary key default gen_random_uuid(),
   player_id uuid not null references players(id) on delete cascade,
   content text not null,
+  color text not null default 'gray' check (color in ('gray', 'red', 'green')),
   created_at timestamptz not null default now()
 );
 
 create index if not exists player_notes_player_id_idx on player_notes (player_id);
+
+-- Migration for a project that already ran this file before color existed.
+alter table player_notes add column if not exists color text not null default 'gray';
+alter table player_notes drop constraint if exists player_notes_color_check;
+alter table player_notes add constraint player_notes_color_check check (color in ('gray', 'red', 'green'));
 
 alter table player_notes enable row level security;
 

@@ -15,10 +15,13 @@ export interface Player {
   is_drafted: boolean;
 }
 
+export type NoteColor = "gray" | "red" | "green";
+
 export interface PlayerNote {
   id: string;
   player_id: string;
   content: string;
+  color: NoteColor;
   created_at: string;
 }
 

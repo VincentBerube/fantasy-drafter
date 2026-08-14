@@ -2,7 +2,22 @@
 
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
-import { Player, PlayerNote } from "@/types/player";
+import { NoteColor, Player, PlayerNote } from "@/types/player";
+
+const NOTE_COLORS: NoteColor[] = ["gray", "green", "red"];
+
+const NOTE_COLOR_STYLES: Record<
+  NoteColor,
+  { bg: string; border: string; dot: string }
+> = {
+  gray: { bg: "bg-gray-50", border: "border-gray-300", dot: "bg-gray-400" },
+  green: {
+    bg: "bg-emerald-50",
+    border: "border-emerald-400",
+    dot: "bg-emerald-500",
+  },
+  red: { bg: "bg-rose-50", border: "border-rose-400", dot: "bg-rose-500" },
+};
 
 function formatTimestamp(iso: string): string {
   return new Date(iso).toLocaleString(undefined, {
@@ -23,6 +38,7 @@ export default function PlayerDetailModal({
   const [notes, setNotes] = useState<PlayerNote[]>([]);
   const [loading, setLoading] = useState(true);
   const [draft, setDraft] = useState("");
+  const [draftColor, setDraftColor] = useState<NoteColor>("gray");
   const [saving, setSaving] = useState(false);
 
   // Reset when switching to a different player, adjusted during render
@@ -32,6 +48,8 @@ export default function PlayerDetailModal({
     setLoadedPlayerId(player.id);
     setLoading(true);
     setNotes([]);
+    setDraft("");
+    setDraftColor("gray");
   }
 
   useEffect(() => {
@@ -66,7 +84,7 @@ export default function PlayerDetailModal({
     setSaving(true);
     const { data, error } = await supabase
       .from("player_notes")
-      .insert({ player_id: player.id, content })
+      .insert({ player_id: player.id, content, color: draftColor })
       .select()
       .single();
     setSaving(false);
@@ -76,6 +94,7 @@ export default function PlayerDetailModal({
     }
     setNotes((prev) => [data as PlayerNote, ...prev]);
     setDraft("");
+    setDraftColor("gray");
   }
 
   async function deleteNote(noteId: string) {
@@ -85,6 +104,19 @@ export default function PlayerDetailModal({
       .delete()
       .eq("id", noteId);
     if (error) console.error("Failed to delete note:", error);
+  }
+
+  async function cycleNoteColor(note: PlayerNote) {
+    const nextColor =
+      NOTE_COLORS[(NOTE_COLORS.indexOf(note.color) + 1) % NOTE_COLORS.length];
+    setNotes((prev) =>
+      prev.map((n) => (n.id === note.id ? { ...n, color: nextColor } : n))
+    );
+    const { error } = await supabase
+      .from("player_notes")
+      .update({ color: nextColor })
+      .eq("id", note.id);
+    if (error) console.error("Failed to update note color:", error);
   }
 
   return (
@@ -168,9 +200,19 @@ export default function PlayerDetailModal({
               {notes.map((note) => (
                 <li
                   key={note.id}
-                  className="group flex items-start justify-between gap-2 rounded-md bg-gray-50 px-3 py-2"
+                  className={`group flex items-start gap-2 rounded-md border-l-4 px-3 py-2 ${
+                    NOTE_COLOR_STYLES[note.color].bg
+                  } ${NOTE_COLOR_STYLES[note.color].border}`}
                 >
-                  <div>
+                  <button
+                    onClick={() => cycleNoteColor(note)}
+                    aria-label={`Note color: ${note.color} — click to change`}
+                    title={`Color: ${note.color} — click to change`}
+                    className={`mt-1 h-2.5 w-2.5 shrink-0 rounded-full ${
+                      NOTE_COLOR_STYLES[note.color].dot
+                    }`}
+                  />
+                  <div className="min-w-0 flex-1">
                     <p className="text-sm text-gray-800">{note.content}</p>
                     <p className="mt-0.5 text-xs text-gray-400">
                       {formatTimestamp(note.created_at)}
@@ -189,27 +231,47 @@ export default function PlayerDetailModal({
           )}
         </div>
 
-        <div className="flex items-end gap-2 border-t border-gray-100 px-4 py-3">
-          <textarea
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                addNote();
-              }
-            }}
-            placeholder="Add a note… (Enter to save, Shift+Enter for a new line)"
-            rows={2}
-            className="min-w-0 flex-1 resize-none rounded-md border border-gray-200 px-2 py-1.5 text-sm outline-none focus:border-gray-400"
-          />
-          <button
-            onClick={addNote}
-            disabled={saving || !draft.trim()}
-            className="shrink-0 rounded-md bg-gray-900 px-3 py-1.5 text-sm font-semibold text-white hover:bg-gray-700 disabled:opacity-40"
-          >
-            Add
-          </button>
+        <div className="border-t border-gray-100 px-4 py-3">
+          <div className="mb-2 flex items-center gap-1.5">
+            <span className="text-xs text-gray-400">Color:</span>
+            {NOTE_COLORS.map((color) => (
+              <button
+                key={color}
+                onClick={() => setDraftColor(color)}
+                aria-label={`Set new note color to ${color}`}
+                title={color}
+                className={`h-4 w-4 rounded-full ${
+                  NOTE_COLOR_STYLES[color].dot
+                } ${
+                  draftColor === color
+                    ? "ring-2 ring-gray-400 ring-offset-1"
+                    : ""
+                }`}
+              />
+            ))}
+          </div>
+          <div className="flex items-end gap-2">
+            <textarea
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  addNote();
+                }
+              }}
+              placeholder="Add a note… (Enter to save, Shift+Enter for a new line)"
+              rows={2}
+              className="min-w-0 flex-1 resize-none rounded-md border border-gray-200 px-2 py-1.5 text-sm outline-none focus:border-gray-400"
+            />
+            <button
+              onClick={addNote}
+              disabled={saving || !draft.trim()}
+              className="shrink-0 rounded-md bg-gray-900 px-3 py-1.5 text-sm font-semibold text-white hover:bg-gray-700 disabled:opacity-40"
+            >
+              Add
+            </button>
+          </div>
         </div>
       </div>
     </div>

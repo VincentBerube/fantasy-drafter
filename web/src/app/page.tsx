@@ -9,6 +9,7 @@ export default async function Home() {
   const { data, error } = await supabase
     .from("players")
     .select("*")
+    .order("my_rank", { ascending: true, nullsFirst: false })
     .order("overall_rank", { ascending: true, nullsFirst: false });
 
   return (

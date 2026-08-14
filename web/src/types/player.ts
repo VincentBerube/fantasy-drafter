@@ -7,6 +7,7 @@ export interface Player {
   team: string | null;
   bye_week: number | null;
   overall_rank: number | null;
+  my_rank: number | null;
   tier: number | null;
   adp: number | null;
   last_season_rank: number | null;

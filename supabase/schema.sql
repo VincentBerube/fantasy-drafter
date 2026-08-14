@@ -15,7 +15,8 @@ create table if not exists players (
   position text not null check (position in ('QB', 'RB', 'WR', 'TE', 'K', 'DST')),
   team text,
   bye_week integer,
-  overall_rank integer,
+  overall_rank integer, -- ESPN's imported rank, refreshed by the ingestion pipeline every run
+  my_rank integer, -- user's personal manual rank; drag-and-drop only ever touches this, never overall_rank
   tier integer,
   adp numeric(6, 2),
   last_season_rank integer,
@@ -30,6 +31,12 @@ create index if not exists players_position_idx on players (position);
 create index if not exists players_tier_idx on players (tier);
 create index if not exists players_overall_rank_idx on players (overall_rank);
 create index if not exists players_is_drafted_idx on players (is_drafted);
+
+-- Migration for a project that already ran this file before my_rank existed
+-- (create table above is a no-op once the table exists). Safe to re-run.
+alter table players add column if not exists my_rank integer;
+create index if not exists players_my_rank_idx on players (my_rank);
+update players set my_rank = overall_rank where my_rank is null;
 
 -- Keep updated_at current on every edit (tier drag, tags, notes, is_drafted toggle, etc).
 create or replace function set_updated_at()

@@ -13,6 +13,7 @@ export interface Player {
   last_season_rank: number | null;
   tags: string[];
   is_drafted: boolean;
+  note_count: number;
 }
 
 export type NoteColor = "gray" | "red" | "green";

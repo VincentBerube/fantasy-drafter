@@ -136,11 +136,16 @@ def transform_player(raw: dict, bye_weeks: dict) -> dict | None:
     if not espn_id or not player.get("fullName"):
         return None
 
-    # Deliberately omits tier/tags/notes/is_drafted: PostgREST's upsert only touches
-    # columns present in the payload, so leaving these out means re-running the
-    # pipeline mid-prep refreshes rank/adp/bye_week without clobbering anything the
-    # user has already set in the UI. New rows still get sane defaults from the
-    # table schema (tier null, tags '{}', notes '', is_drafted false).
+    # Deliberately omits tier/is_drafted: PostgREST's upsert only touches columns
+    # present in the payload, so leaving these out means re-running the pipeline
+    # mid-prep refreshes rank/adp/bye_week without clobbering anything the user
+    # has already set in the UI. New rows still get sane defaults from the table
+    # schema (tier null, tags '{}', is_drafted false).
+    #
+    # `injured` is transient — not a players column. upsert_to_supabase() uses it
+    # to add/remove just the "Injured" tag from the player's existing tags array
+    # (merged in there, not here, since that needs the current DB state) and
+    # pops it before the actual upsert.
     return {
         "espn_player_id": espn_id,
         "player_name": player["fullName"],
@@ -149,10 +154,32 @@ def transform_player(raw: dict, bye_weeks: dict) -> dict | None:
         "bye_week": bye_weeks.get(team) if team else None,
         "overall_rank": overall_rank,
         "adp": adp,
+        "injured": bool(player.get("injured", False)),
         # last_season_rank omitted for the same reason: not exposed by kona_player_info
         # (would need a separate historical pull), and omitting rather than sending None
         # avoids clobbering it if it's ever populated another way.
     }
+
+
+def compute_tag_updates(records: list, current_tags: dict) -> list:
+    """Merges each record's ESPN-derived injury flag into its existing tags,
+    adding/removing only the "Injured" tag so the user's manual tags
+    (Star/Target/Sleeper/Avoid) are left alone. `tags` is only included in a
+    record when it actually needs to change, so PostgREST's partial upsert
+    leaves every other row's tags column completely untouched."""
+    updated = []
+    for r in records:
+        injured = r.pop("injured")
+        existing = current_tags.get(r["espn_player_id"], [])
+        tags = list(existing)
+        if injured and "Injured" not in tags:
+            tags.append("Injured")
+        elif not injured and "Injured" in tags:
+            tags.remove("Injured")
+        if tags != existing:
+            r["tags"] = tags
+        updated.append(r)
+    return updated
 
 
 def upsert_to_supabase(records: list) -> None:
@@ -165,7 +192,36 @@ def upsert_to_supabase(records: list) -> None:
         return
 
     client = create_client(url, key)
-    client.table("players").upsert(records, on_conflict="espn_player_id").execute()
+
+    # Read current tags so the Injured-tag merge below only ever adds/removes
+    # that one tag. Note: a manual tag edit in the UI during the narrow window
+    # between this read and the write further down could be overwritten —
+    # acceptable per the project's no-conflict-handling stance, and it would
+    # only affect a player whose injury status also changed this same run.
+    existing_rows = (
+        client.table("players")
+        .select("espn_player_id, tags")
+        .not_.is_("espn_player_id", "null")
+        .execute()
+    )
+    current_tags = {row["espn_player_id"]: row["tags"] or [] for row in existing_rows.data}
+
+    records = compute_tag_updates(records, current_tags)
+
+    # PostgREST's bulk upsert builds one SQL statement from the union of keys
+    # across the whole batch — a record that omits `tags` still gets a `tags`
+    # column in that statement if ANY other record in the same call has one,
+    # and comes through as a literal NULL (which violates the not-null
+    # constraint). Splitting into two homogeneous batches keeps the "omit the
+    # key to leave it untouched" behavior working for the majority (no tag
+    # change) while still writing the ones that do need it.
+    unchanged = [r for r in records if "tags" not in r]
+    changed = [r for r in records if "tags" in r]
+    if changed:
+        print(f"  Injured tag changed for {len(changed)} player(s) this run")
+        client.table("players").upsert(changed, on_conflict="espn_player_id").execute()
+    if unchanged:
+        client.table("players").upsert(unchanged, on_conflict="espn_player_id").execute()
     print(f"  upserted {len(records)} players to Supabase")
 
 

@@ -8,7 +8,7 @@ import {
   type DropResult,
 } from "@hello-pangea/dnd";
 import { supabase } from "@/lib/supabase";
-import { Player, Position, POSITIONS } from "@/types/player";
+import { Player, PlayerNote, Position, POSITIONS } from "@/types/player";
 import PlayerDetailModal from "@/components/PlayerDetailModal";
 
 const PAGE_SIZE = 100;
@@ -23,13 +23,18 @@ function byRank(a: Player, b: Player) {
   return (a.overall_rank ?? Infinity) - (b.overall_rank ?? Infinity);
 }
 
-const ALL_TAGS = ["Star", "Target", "Sleeper", "Avoid"];
+// "Injured" is manually toggleable like the others, but the ingestion
+// pipeline also sets/clears it automatically from ESPN's injury data on each
+// run (see ingest_espn.py) — a manual add/remove here can be overwritten by
+// the next pipeline run if ESPN's status disagrees.
+const ALL_TAGS = ["Star", "Target", "Sleeper", "Avoid", "Injured"];
 
 const TAG_STYLES: Record<string, string> = {
   Star: "bg-amber-100 text-amber-800",
   Target: "bg-emerald-100 text-emerald-800",
   Sleeper: "bg-sky-100 text-sky-800",
   Avoid: "bg-rose-100 text-rose-800",
+  Injured: "bg-red-100 text-red-800",
 };
 
 function TagPill({
@@ -164,6 +169,17 @@ const PlayerRow = memo(function PlayerRow({
                 />
               ))}
               <TagPicker player={player} onToggleTag={onToggleTag} />
+              {player.note_count > 0 && (
+                <button
+                  onClick={() => onSelect(player)}
+                  title={`${player.note_count} note${
+                    player.note_count === 1 ? "" : "s"
+                  }`}
+                  className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700 hover:bg-blue-100"
+                >
+                  📝 {player.note_count}
+                </button>
+              )}
             </div>
           </div>
 
@@ -204,7 +220,8 @@ export default function PlayerBoard({
 
   // Mirrors the players table so other devices (or a re-run of the ingestion
   // pipeline) show up here live. Single-user app, no conflict handling — an
-  // incoming row simply replaces local state for that id (see architecture doc).
+  // incoming row replaces local state for that id, aside from the derived
+  // note_count field which is merged in separately (see architecture doc).
   useEffect(() => {
     const channel = supabase
       .channel("players-changes")
@@ -217,13 +234,50 @@ export default function PlayerBoard({
               const deletedId = (payload.old as Partial<Player>).id;
               return prev.filter((p) => p.id !== deletedId);
             }
+            // note_count isn't a real players column (it's a PostgREST
+            // embedded count computed at initial fetch time), so a raw
+            // realtime payload won't include it — carry the existing value
+            // forward instead of letting it get wiped out on every edit.
             const incoming = payload.new as Player;
-            const exists = prev.some((p) => p.id === incoming.id);
-            const next = exists
-              ? prev.map((p) => (p.id === incoming.id ? incoming : p))
-              : [...prev, incoming];
+            const existing = prev.find((p) => p.id === incoming.id);
+            const merged = {
+              ...incoming,
+              note_count: existing?.note_count ?? 0,
+            };
+            const next = existing
+              ? prev.map((p) => (p.id === merged.id ? merged : p))
+              : [...prev, merged];
             return next.sort(byRank);
           });
+        }
+      )
+      // player_notes changes don't touch the players row itself, so they need
+      // their own listener to keep each row's note_count badge live across
+      // devices (e.g. add a note on your phone, see the count update here).
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "player_notes" },
+        (payload) => {
+          const playerId = (payload.new as PlayerNote).player_id;
+          setPlayers((prev) =>
+            prev.map((p) =>
+              p.id === playerId ? { ...p, note_count: p.note_count + 1 } : p
+            )
+          );
+        }
+      )
+      .on(
+        "postgres_changes",
+        { event: "DELETE", schema: "public", table: "player_notes" },
+        (payload) => {
+          const playerId = (payload.old as Partial<PlayerNote>).player_id;
+          setPlayers((prev) =>
+            prev.map((p) =>
+              p.id === playerId
+                ? { ...p, note_count: Math.max(0, p.note_count - 1) }
+                : p
+            )
+          );
         }
       )
       .subscribe();

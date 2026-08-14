@@ -22,6 +22,8 @@ function byRank(a: Player, b: Player) {
   return (a.overall_rank ?? Infinity) - (b.overall_rank ?? Infinity);
 }
 
+const ALL_TAGS = ["Star", "Target", "Sleeper", "Avoid"];
+
 const TAG_STYLES: Record<string, string> = {
   Star: "bg-amber-100 text-amber-800",
   Target: "bg-emerald-100 text-emerald-800",
@@ -29,15 +31,91 @@ const TAG_STYLES: Record<string, string> = {
   Avoid: "bg-rose-100 text-rose-800",
 };
 
-function TagPill({ tag }: { tag: string }) {
+function TagPill({
+  tag,
+  onRemove,
+}: {
+  tag: string;
+  onRemove: () => void;
+}) {
   return (
     <span
-      className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+      className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${
         TAG_STYLES[tag] ?? "bg-gray-100 text-gray-700"
       }`}
     >
       {tag}
+      <button
+        onClick={onRemove}
+        aria-label={`Remove ${tag}`}
+        className="leading-none opacity-60 hover:opacity-100"
+      >
+        ×
+      </button>
     </span>
+  );
+}
+
+function TagPicker({
+  player,
+  onToggleTag,
+}: {
+  player: Player;
+  onToggleTag: (player: Player, tag: string) => void;
+}) {
+  const available = ALL_TAGS.filter((t) => !player.tags.includes(t));
+  if (available.length === 0) return null;
+
+  return (
+    <details className="relative">
+      <summary className="list-none cursor-pointer rounded-full border border-dashed border-gray-300 px-2 py-0.5 text-xs text-gray-400 hover:border-gray-400 hover:text-gray-600 [&::-webkit-details-marker]:hidden">
+        + Tag
+      </summary>
+      <div className="absolute z-20 mt-1 flex flex-col gap-0.5 rounded-md border border-gray-200 bg-white p-1 shadow-lg">
+        {available.map((tag) => (
+          <button
+            key={tag}
+            onClick={() => onToggleTag(player, tag)}
+            className="whitespace-nowrap rounded px-2 py-1 text-left text-xs text-gray-700 hover:bg-gray-100"
+          >
+            {tag}
+          </button>
+        ))}
+      </div>
+    </details>
+  );
+}
+
+function NotesEditor({
+  player,
+  onSave,
+}: {
+  player: Player;
+  onSave: (player: Player, notes: string) => void;
+}) {
+  const [value, setValue] = useState(player.notes);
+
+  // Resync if notes change from elsewhere (another device, or our own
+  // optimistic update echoing back through realtime) — harmless when the
+  // value already matches what's typed. Adjusting state during render
+  // (rather than in an effect) per https://react.dev/learn/you-might-not-need-an-effect.
+  const [prevNotes, setPrevNotes] = useState(player.notes);
+  if (player.notes !== prevNotes) {
+    setPrevNotes(player.notes);
+    setValue(player.notes);
+  }
+
+  return (
+    <input
+      type="text"
+      value={value}
+      onChange={(e) => setValue(e.target.value)}
+      onBlur={() => {
+        if (value !== player.notes) onSave(player, value);
+      }}
+      placeholder="Add note…"
+      className="min-w-0 flex-1 border-b border-transparent bg-transparent text-xs text-gray-500 outline-none hover:border-gray-200 focus:border-gray-400"
+    />
   );
 }
 
@@ -54,11 +132,15 @@ const PlayerRow = memo(function PlayerRow({
   index,
   isDragDisabled,
   onToggleDrafted,
+  onToggleTag,
+  onUpdateNotes,
 }: {
   player: Player;
   index: number;
   isDragDisabled: boolean;
   onToggleDrafted: (player: Player) => void;
+  onToggleTag: (player: Player, tag: string) => void;
+  onUpdateNotes: (player: Player, notes: string) => void;
 }) {
   return (
     <Draggable
@@ -102,21 +184,17 @@ const PlayerRow = memo(function PlayerRow({
                 {player.bye_week ? ` · BYE ${player.bye_week}` : ""}
               </span>
             </div>
-            {(player.tags.length > 0 || player.notes) && (
-              <div className="mt-1 flex flex-wrap items-center gap-1">
-                {player.tags.map((tag) => (
-                  <TagPill key={tag} tag={tag} />
-                ))}
-                {player.notes && (
-                  <span
-                    className="truncate text-xs text-gray-500"
-                    title={player.notes}
-                  >
-                    {player.notes}
-                  </span>
-                )}
-              </div>
-            )}
+            <div className="mt-1 flex flex-wrap items-center gap-1.5">
+              {player.tags.map((tag) => (
+                <TagPill
+                  key={tag}
+                  tag={tag}
+                  onRemove={() => onToggleTag(player, tag)}
+                />
+              ))}
+              <TagPicker player={player} onToggleTag={onToggleTag} />
+              <NotesEditor player={player} onSave={onUpdateNotes} />
+            </div>
           </div>
 
           <span
@@ -235,6 +313,35 @@ export default function PlayerBoard({
       });
   }, []);
 
+  const toggleTag = useCallback((player: Player, tag: string) => {
+    const tags = player.tags.includes(tag)
+      ? player.tags.filter((t) => t !== tag)
+      : [...player.tags, tag];
+    setPlayers((prev) =>
+      prev.map((p) => (p.id === player.id ? { ...p, tags } : p))
+    );
+    supabase
+      .from("players")
+      .update({ tags })
+      .eq("id", player.id)
+      .then(({ error }) => {
+        if (error) console.error("Failed to update tags:", error);
+      });
+  }, []);
+
+  const updateNotes = useCallback((player: Player, notes: string) => {
+    setPlayers((prev) =>
+      prev.map((p) => (p.id === player.id ? { ...p, notes } : p))
+    );
+    supabase
+      .from("players")
+      .update({ notes })
+      .eq("id", player.id)
+      .then(({ error }) => {
+        if (error) console.error("Failed to update notes:", error);
+      });
+  }, []);
+
   function handleDragEnd(result: DropResult) {
     if (!isReorderable || !result.destination) return;
     // Local (in-page) indices -> global indices into the full players array,
@@ -348,6 +455,8 @@ export default function PlayerBoard({
                       index={index}
                       isDragDisabled={!isReorderable}
                       onToggleDrafted={toggleDrafted}
+                      onToggleTag={toggleTag}
+                      onUpdateNotes={updateNotes}
                     />
                   </Fragment>
                 );

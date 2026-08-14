@@ -216,6 +216,7 @@ export default function PlayerBoard({
     "ALL"
   );
   const [hideDrafted, setHideDrafted] = useState(false);
+  const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
 
   // Mirrors the players table so other devices (or a re-run of the ingestion
@@ -290,17 +291,24 @@ export default function PlayerBoard({
   // Reordering only makes sense against the full, unfiltered list — otherwise a
   // drag's `index` refers to a position in the filtered subset, not the
   // underlying array, and there's no unambiguous way to map it back.
-  const isReorderable = positionFilter === "ALL" && !hideDrafted;
+  const isReorderable =
+    positionFilter === "ALL" && !hideDrafted && search.trim() === "";
 
-  const visiblePlayers = useMemo(
-    () =>
-      players.filter(
-        (p) =>
-          (positionFilter === "ALL" || p.position === positionFilter) &&
-          (!hideDrafted || !p.is_drafted)
-      ),
-    [players, positionFilter, hideDrafted]
-  );
+  const visiblePlayers = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return players.filter((p) => {
+      if (positionFilter !== "ALL" && p.position !== positionFilter)
+        return false;
+      if (hideDrafted && p.is_drafted) return false;
+      if (q) {
+        const haystack = `${p.player_name} ${p.team ?? ""} ${p.tags.join(
+          " "
+        )}`.toLowerCase();
+        if (!haystack.includes(q)) return false;
+      }
+      return true;
+    });
+  }, [players, positionFilter, hideDrafted, search]);
 
   // Large lists (1000+ rows) make both re-render and drag-and-drop noticeably
   // laggy, and a smaller tab like DST (~30 players) was visibly snappier —
@@ -316,7 +324,7 @@ export default function PlayerBoard({
   // Reset to page 1 whenever the filter changes, so switching tabs never
   // strands you on a now-out-of-range page. Adjusting state during render
   // (rather than in an effect) per https://react.dev/learn/you-might-not-need-an-effect.
-  const filterKey = `${positionFilter}|${hideDrafted}`;
+  const filterKey = `${positionFilter}|${hideDrafted}|${search}`;
   const [prevFilterKey, setPrevFilterKey] = useState(filterKey);
   if (filterKey !== prevFilterKey) {
     setPrevFilterKey(filterKey);
@@ -398,6 +406,25 @@ export default function PlayerBoard({
 
   return (
     <div className="mx-auto max-w-4xl px-3 py-4">
+      <div className="relative mb-3">
+        <input
+          type="text"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search by name, team, or tag…"
+          className="w-full rounded-md border border-gray-200 px-3 py-1.5 pr-8 text-sm outline-none focus:border-gray-400"
+        />
+        {search && (
+          <button
+            onClick={() => setSearch("")}
+            aria-label="Clear search"
+            className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+          >
+            ×
+          </button>
+        )}
+      </div>
+
       <div className="mb-4 flex flex-wrap items-center gap-2">
         {(["ALL", ...POSITIONS] as const).map((pos) => (
           <button
@@ -457,8 +484,9 @@ export default function PlayerBoard({
 
       {!isReorderable && (
         <p className="mb-3 text-xs text-gray-500">
-          Drag-to-reorder is disabled while filtering — switch to the ALL tab
-          with &ldquo;Hide drafted&rdquo; off to re-rank.
+          Drag-to-reorder is disabled while filtering or searching — switch to
+          the ALL tab, clear the search, and turn off &ldquo;Hide
+          drafted&rdquo; to re-rank.
         </p>
       )}
 

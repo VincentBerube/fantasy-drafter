@@ -1,13 +1,18 @@
 "use client";
 
-import { Fragment, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import {
   DragDropContext,
   Draggable,
   Droppable,
   type DropResult,
 } from "@hello-pangea/dnd";
+import { supabase } from "@/lib/supabase";
 import { Player, Position, POSITIONS } from "@/types/player";
+
+function byRank(a: Player, b: Player) {
+  return (a.overall_rank ?? Infinity) - (b.overall_rank ?? Infinity);
+}
 
 const TAG_STYLES: Record<string, string> = {
   Star: "bg-amber-100 text-amber-800",
@@ -47,6 +52,37 @@ export default function PlayerBoard({
   );
   const [hideDrafted, setHideDrafted] = useState(false);
 
+  // Mirrors the players table so other devices (or a re-run of the ingestion
+  // pipeline) show up here live. Single-user app, no conflict handling — an
+  // incoming row simply replaces local state for that id (see architecture doc).
+  useEffect(() => {
+    const channel = supabase
+      .channel("players-changes")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "players" },
+        (payload) => {
+          setPlayers((prev) => {
+            if (payload.eventType === "DELETE") {
+              const deletedId = (payload.old as Partial<Player>).id;
+              return prev.filter((p) => p.id !== deletedId);
+            }
+            const incoming = payload.new as Player;
+            const exists = prev.some((p) => p.id === incoming.id);
+            const next = exists
+              ? prev.map((p) => (p.id === incoming.id ? incoming : p))
+              : [...prev, incoming];
+            return next.sort(byRank);
+          });
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
+
   // Reordering only makes sense against the full, unfiltered list — otherwise a
   // drag's `index` refers to a position in the filtered subset, not the
   // underlying array, and there's no unambiguous way to map it back.
@@ -62,10 +98,18 @@ export default function PlayerBoard({
     [players, positionFilter, hideDrafted]
   );
 
-  function toggleDrafted(id: string) {
+  function toggleDrafted(player: Player) {
+    const is_drafted = !player.is_drafted;
     setPlayers((prev) =>
-      prev.map((p) => (p.id === id ? { ...p, is_drafted: !p.is_drafted } : p))
+      prev.map((p) => (p.id === player.id ? { ...p, is_drafted } : p))
     );
+    supabase
+      .from("players")
+      .update({ is_drafted })
+      .eq("id", player.id)
+      .then(({ error }) => {
+        if (error) console.error("Failed to update is_drafted:", error);
+      });
   }
 
   function handleDragEnd(result: DropResult) {
@@ -74,11 +118,26 @@ export default function PlayerBoard({
     const to = result.destination.index;
     if (from === to) return;
 
-    setPlayers((prev) => {
-      const next = [...prev];
-      const [moved] = next.splice(from, 1);
-      next.splice(to, 0, moved);
-      return next.map((p, i) => ({ ...p, overall_rank: i + 1 }));
+    const next = [...players];
+    const [moved] = next.splice(from, 1);
+    next.splice(to, 0, moved);
+    const reranked = next.map((p, i) => ({ ...p, overall_rank: i + 1 }));
+    setPlayers(reranked);
+
+    // Only ranks strictly between the old and new position actually changed.
+    const lo = Math.min(from, to);
+    const hi = Math.max(from, to);
+    const changed = reranked.slice(lo, hi + 1);
+    Promise.all(
+      changed.map((p) =>
+        supabase
+          .from("players")
+          .update({ overall_rank: p.overall_rank })
+          .eq("id", p.id)
+      )
+    ).then((results) => {
+      const failed = results.filter((r) => r.error);
+      if (failed.length > 0) console.error("Failed to persist ranks:", failed);
     });
   }
 
@@ -190,7 +249,7 @@ export default function PlayerBoard({
                           </span>
 
                           <button
-                            onClick={() => toggleDrafted(player.id)}
+                            onClick={() => toggleDrafted(player)}
                             className={`shrink-0 rounded-md px-2.5 py-1 text-xs font-semibold ${
                               player.is_drafted
                                 ? "bg-gray-100 text-gray-600 hover:bg-gray-200"

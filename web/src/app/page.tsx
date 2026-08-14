@@ -1,7 +1,16 @@
 import PlayerBoard from "@/components/PlayerBoard";
-import { mockPlayers } from "@/lib/mock-players";
+import { supabase } from "@/lib/supabase";
 
-export default function Home() {
+// Draft state changes constantly (rank edits, drafted toggles) — never
+// statically cache this route.
+export const dynamic = "force-dynamic";
+
+export default async function Home() {
+  const { data, error } = await supabase
+    .from("players")
+    .select("*")
+    .order("overall_rank", { ascending: true, nullsFirst: false });
+
   return (
     <div className="min-h-screen bg-gray-50">
       <header className="border-b border-gray-200 bg-white px-3 py-3">
@@ -9,7 +18,13 @@ export default function Home() {
           Draft Cheat Sheet
         </h1>
       </header>
-      <PlayerBoard initialPlayers={mockPlayers} />
+      {error ? (
+        <p className="px-3 py-4 text-sm text-red-600">
+          Failed to load players: {error.message}
+        </p>
+      ) : (
+        <PlayerBoard initialPlayers={data ?? []} />
+      )}
     </div>
   );
 }

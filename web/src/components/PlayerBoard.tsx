@@ -448,6 +448,37 @@ export default function PlayerBoard({
     setPage(1);
   }
 
+  const [syncing, setSyncing] = useState(false);
+  const [syncMessage, setSyncMessage] = useState<string | null>(null);
+
+  // Server-side route re-fetches ESPN's rank/ADP/bye-week/injury data and
+  // upserts it (see api/sync/route.ts for exactly what it does and doesn't
+  // touch — my_rank, other tags, and notes are never part of that payload).
+  // No manual refetch here: the existing realtime subscription above picks
+  // up the resulting writes and updates local state on its own.
+  async function handleSync() {
+    setSyncing(true);
+    setSyncMessage(null);
+    try {
+      const res = await fetch("/api/sync", { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) {
+        setSyncMessage(`Sync failed: ${data.error ?? res.statusText}`);
+      } else {
+        setSyncMessage(
+          `Synced ${data.synced} players` +
+            (data.injuredChanges > 0
+              ? `, ${data.injuredChanges} injury tag change(s).`
+              : ".")
+        );
+      }
+    } catch (err) {
+      setSyncMessage(`Sync failed: ${(err as Error).message}`);
+    } finally {
+      setSyncing(false);
+    }
+  }
+
   const toggleDrafted = useCallback((player: Player) => {
     const is_drafted = !player.is_drafted;
     setPlayers((prev) =>
@@ -606,6 +637,19 @@ export default function PlayerBoard({
 
   return (
     <div className="mx-auto max-w-4xl px-3 py-4">
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <button
+          onClick={handleSync}
+          disabled={syncing}
+          className="rounded-md border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+        >
+          {syncing ? "Syncing…" : "Sync ESPN Data"}
+        </button>
+        {syncMessage && (
+          <span className="text-xs text-gray-500">{syncMessage}</span>
+        )}
+      </div>
+
       <div className="relative mb-3">
         <input
           type="text"

@@ -168,6 +168,14 @@ export default function PlayerDetailModal({
             </div>
           </div>
           <div>
+            <div className="text-xs text-gray-400">Last Season</div>
+            <div className="font-medium text-gray-900">
+              {player.last_season_rank
+                ? `${player.position}${player.last_season_rank}`
+                : "—"}
+            </div>
+          </div>
+          <div>
             <div className="text-xs text-gray-400">Tier</div>
             <div className="font-medium text-gray-900">
               {player.tier ?? "—"}

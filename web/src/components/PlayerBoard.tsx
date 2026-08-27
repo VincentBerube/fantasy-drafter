@@ -37,6 +37,7 @@ const ALL_TAGS = [
   "Longshot",
   "High Upside",
   "Safe Pick",
+  "Handcuff",
 ];
 
 const TAG_STYLES: Record<string, string> = {
@@ -49,6 +50,7 @@ const TAG_STYLES: Record<string, string> = {
   Longshot: "bg-orange-100 text-orange-800",
   "High Upside": "bg-cyan-100 text-cyan-800",
   "Safe Pick": "bg-lime-100 text-lime-800",
+  Handcuff: "bg-indigo-100 text-indigo-800",
 };
 
 function TagPill({

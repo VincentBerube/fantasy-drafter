@@ -184,6 +184,7 @@ const PlayerRow = memo(function PlayerRow({
   player,
   index,
   isDragDisabled,
+  positionRank,
   onToggleDrafted,
   onToggleTag,
   onSelect,
@@ -191,6 +192,7 @@ const PlayerRow = memo(function PlayerRow({
   player: Player;
   index: number;
   isDragDisabled: boolean;
+  positionRank: number | null;
   onToggleDrafted: (player: Player) => void;
   onToggleTag: (player: Player, tag: string) => void;
   onSelect: (player: Player) => void;
@@ -198,9 +200,9 @@ const PlayerRow = memo(function PlayerRow({
   const espnRef = `ESPN #${player.overall_rank ?? "—"} · ${
     player.adp?.toFixed(1) ?? "—"
   }`;
-  const positionLine = `${player.position}${player.team ? ` · ${player.team}` : ""}${
-    player.bye_week ? ` · BYE ${player.bye_week}` : ""
-  }`;
+  const positionLine = `${player.position}${positionRank ?? ""}${
+    player.team ? ` · ${player.team}` : ""
+  }${player.bye_week ? ` · BYE ${player.bye_week}` : ""}`;
   const draftButtonClass = `shrink-0 rounded-md text-xs font-semibold ${
     player.is_drafted
       ? "bg-gray-100 text-gray-600 hover:bg-gray-200"
@@ -432,6 +434,20 @@ export default function PlayerBoard({
       return true;
     });
   }, [players, positionFilter, hideDrafted, search]);
+
+  // Positional rank (e.g. "WR13") based on your own rank order, not ESPN's —
+  // recomputed from the full player list (not the filtered/paginated view)
+  // whenever ranks change, so it stays correct through drag-reorder.
+  const positionalRanks = useMemo(() => {
+    const counts = new Map<string, number>();
+    const ranks = new Map<string, number>();
+    for (const p of [...players].sort(byRank)) {
+      const next = (counts.get(p.position) ?? 0) + 1;
+      counts.set(p.position, next);
+      ranks.set(p.id, next);
+    }
+    return ranks;
+  }, [players]);
 
   // Large lists (1000+ rows) make both re-render and drag-and-drop noticeably
   // laggy, and a smaller tab like DST (~30 players) was visibly snappier —
@@ -783,6 +799,7 @@ export default function PlayerBoard({
                       player={player}
                       index={index}
                       isDragDisabled={!isReorderable}
+                      positionRank={positionalRanks.get(player.id) ?? null}
                       onToggleDrafted={toggleDrafted}
                       onToggleTag={toggleTag}
                       onSelect={selectPlayer}

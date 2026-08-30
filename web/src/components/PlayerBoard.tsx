@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, memo, useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   DragDropContext,
   Draggable,
@@ -21,6 +21,52 @@ function byRank(a: Player, b: Player) {
   const diff = effectiveRank(a) - effectiveRank(b);
   if (diff !== 0) return diff;
   return (a.overall_rank ?? Infinity) - (b.overall_rank ?? Infinity);
+}
+
+// Shared by drag-and-drop and the manual rank input: moves the player at
+// index `from` to index `to` in the full (unfiltered, unpaginated) list and
+// renumbers my_rank accordingly. Only my_rank/tier are ever touched here —
+// tags and notes live in their own state/table and pass through untouched.
+function reorderAndRerank(list: Player[], from: number, to: number): Player[] {
+  const next = [...list];
+  const [moved] = next.splice(from, 1);
+  next.splice(to, 0, moved);
+
+  // Tiers are defined by where the breaks fall in rank order (see
+  // toggleTierBreak), so a player moved into a different tier's range needs
+  // to actually join that tier — otherwise tier would silently drift out of
+  // sync with rank order, which is the whole problem this design is meant to
+  // avoid. Only the moved player's tier changes here; everyone else keeps
+  // theirs (dropping into a tier joins it, it doesn't shift it).
+  const neighborTier =
+    to > 0 ? next[to - 1].tier : (next[to + 1]?.tier ?? null);
+  next[to] = { ...next[to], tier: neighborTier };
+
+  // overall_rank stays ESPN's untouched reference value, safe to refresh on
+  // the next ingestion run.
+  return next.map((p, i) => ({ ...p, my_rank: i + 1 }));
+}
+
+// Only ranks strictly between the old and new position actually changed.
+// tier is included for the whole range too (a no-op write for everyone but
+// the moved player) so every record in this batch has the same keys —
+// PostgREST's bulk upsert derives its column set from the union of keys
+// across the batch, so mixing records with/without `tier` would send literal
+// NULLs for the ones missing it (hit this exact bug with the Injured tag in
+// ingest_espn.py).
+function persistRankRange(reranked: Player[], lo: number, hi: number) {
+  const changed = reranked.slice(lo, hi + 1);
+  Promise.all(
+    changed.map((p) =>
+      supabase
+        .from("players")
+        .update({ my_rank: p.my_rank, tier: p.tier })
+        .eq("id", p.id)
+    )
+  ).then((results) => {
+    const failed = results.filter((r) => r.error);
+    if (failed.length > 0) console.error("Failed to persist ranks:", failed);
+  });
 }
 
 // "Injured" is manually toggleable like the others, but the ingestion
@@ -180,6 +226,63 @@ function InsertTierBreak({ onClick }: { onClick: () => void }) {
   );
 }
 
+// Editable "your rank" field — lets you type a target rank (including one
+// that falls on a different page) instead of dragging, since drag-and-drop
+// can only reorder within the currently rendered page. Uncontrolled-ish
+// local text state so keystrokes don't fight the parent re-render; commits
+// on blur/Enter, reverts on Escape or an invalid value.
+function RankInput({
+  value,
+  disabled,
+  onCommit,
+}: {
+  value: number | null;
+  disabled: boolean;
+  onCommit: (rank: number) => void;
+}) {
+  const [text, setText] = useState(value != null ? String(value) : "");
+
+  // Resync local text when the external value changes (e.g. a realtime
+  // update from another device) without fighting in-progress keystrokes.
+  // Adjusting state during render rather than in an effect, per
+  // https://react.dev/learn/you-might-not-need-an-effect.
+  const [prevValue, setPrevValue] = useState(value);
+  if (value !== prevValue) {
+    setPrevValue(value);
+    setText(value != null ? String(value) : "");
+  }
+
+  function commit() {
+    const parsed = parseInt(text, 10);
+    if (Number.isFinite(parsed) && parsed >= 1) {
+      onCommit(parsed);
+    } else {
+      setText(value != null ? String(value) : "");
+    }
+  }
+
+  return (
+    <input
+      type="number"
+      min={1}
+      value={text}
+      disabled={disabled}
+      onChange={(e) => setText(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") {
+          e.currentTarget.blur();
+        } else if (e.key === "Escape") {
+          setText(value != null ? String(value) : "");
+          e.currentTarget.blur();
+        }
+      }}
+      title="Your rank — type a number to move this player to any position, including other pages"
+      className="w-10 shrink-0 rounded border border-transparent bg-transparent text-center text-sm font-semibold text-gray-400 [appearance:textfield] hover:border-gray-200 focus:border-gray-400 focus:bg-white focus:text-gray-900 focus:outline-none disabled:hover:border-transparent [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+    />
+  );
+}
+
 const PlayerRow = memo(function PlayerRow({
   player,
   index,
@@ -187,6 +290,7 @@ const PlayerRow = memo(function PlayerRow({
   positionRank,
   onToggleDrafted,
   onToggleTag,
+  onRankChange,
   onSelect,
 }: {
   player: Player;
@@ -195,6 +299,7 @@ const PlayerRow = memo(function PlayerRow({
   positionRank: number | null;
   onToggleDrafted: (player: Player) => void;
   onToggleTag: (player: Player, tag: string) => void;
+  onRankChange: (player: Player, rank: number) => void;
   onSelect: (player: Player) => void;
 }) {
   const espnRef = `ESPN #${player.overall_rank ?? "—"} · ${
@@ -235,12 +340,11 @@ const PlayerRow = memo(function PlayerRow({
               ⠿
             </span>
 
-            <span
-              className="w-8 shrink-0 text-sm font-semibold text-gray-400"
-              title="Your rank"
-            >
-              {player.my_rank ?? player.overall_rank ?? "—"}
-            </span>
+            <RankInput
+              value={player.my_rank ?? player.overall_rank ?? null}
+              disabled={isDragDisabled}
+              onCommit={(rank) => onRankChange(player, rank)}
+            />
 
             <div className="min-w-0 flex-1">
               <button
@@ -290,12 +394,11 @@ const PlayerRow = memo(function PlayerRow({
               >
                 ⠿
               </span>
-              <span
-                className="w-7 shrink-0 text-sm font-semibold text-gray-400"
-                title="Your rank"
-              >
-                {player.my_rank ?? player.overall_rank ?? "—"}
-              </span>
+              <RankInput
+                value={player.my_rank ?? player.overall_rank ?? null}
+                disabled={isDragDisabled}
+                onCommit={(rank) => onRankChange(player, rank)}
+              />
               <button
                 onClick={() => onSelect(player)}
                 className="min-w-0 flex-1 truncate text-left font-medium text-gray-900"
@@ -544,6 +647,14 @@ export default function PlayerBoard({
     setSelectedPlayerId(player.id);
   }, []);
 
+  // Read inside the stable handleRankChange callback below, which can't
+  // close over the per-render `isReorderable` value the way the plain
+  // (non-memoized) handleDragEnd does.
+  const isReorderableRef = useRef(isReorderable);
+  useEffect(() => {
+    isReorderableRef.current = isReorderable;
+  }, [isReorderable]);
+
   function handleDragEnd(result: DropResult) {
     if (!isReorderable || !result.destination) return;
     // Local (in-page) indices -> global indices into the full players array,
@@ -551,50 +662,28 @@ export default function PlayerBoard({
     const from = pageOffset + result.source.index;
     const to = pageOffset + result.destination.index;
     if (from === to) return;
-
-    const next = [...players];
-    const [moved] = next.splice(from, 1);
-    next.splice(to, 0, moved);
-
-    // Tiers are defined by where the breaks fall in rank order (see
-    // toggleTierBreak), so a player that gets dragged into a different tier's
-    // range needs to actually join that tier — otherwise tier would silently
-    // drift out of sync with rank order, which is the whole problem this
-    // design is meant to avoid. Only the dragged player's tier changes here;
-    // everyone else keeps theirs (dropping into a tier joins it, it doesn't
-    // shift it).
-    const neighborTier =
-      to > 0 ? next[to - 1].tier : (next[to + 1]?.tier ?? null);
-    next[to] = { ...next[to], tier: neighborTier };
-
-    // Drag sets my_rank and (for the moved player only) tier — overall_rank
-    // stays ESPN's untouched reference value, safe to refresh on the next
-    // ingestion run.
-    const reranked = next.map((p, i) => ({ ...p, my_rank: i + 1 }));
+    const reranked = reorderAndRerank(players, from, to);
     setPlayers(reranked);
-
-    // Only ranks strictly between the old and new position actually changed.
-    // tier is included for the whole range too (a no-op write for everyone
-    // but the moved player) so every record in this batch has the same keys
-    // — PostgREST's bulk upsert derives its column set from the union of
-    // keys across the batch, so mixing records with/without `tier` would
-    // send literal NULLs for the ones missing it (hit this exact bug with
-    // the Injured tag in ingest_espn.py).
-    const lo = Math.min(from, to);
-    const hi = Math.max(from, to);
-    const changed = reranked.slice(lo, hi + 1);
-    Promise.all(
-      changed.map((p) =>
-        supabase
-          .from("players")
-          .update({ my_rank: p.my_rank, tier: p.tier })
-          .eq("id", p.id)
-      )
-    ).then((results) => {
-      const failed = results.filter((r) => r.error);
-      if (failed.length > 0) console.error("Failed to persist ranks:", failed);
-    });
+    persistRankRange(reranked, Math.min(from, to), Math.max(from, to));
   }
+
+  // Typing a rank operates on the full array regardless of which page is
+  // currently rendered, so — unlike drag — this works for moves across page
+  // boundaries (e.g. page 2 -> page 1). Kept as a stable useCallback (via a
+  // functional setPlayers update) so it doesn't defeat PlayerRow's memo on
+  // every render the way a plain function recreated each render would.
+  const handleRankChange = useCallback((player: Player, desiredRank: number) => {
+    setPlayers((prev) => {
+      if (!isReorderableRef.current) return prev;
+      const from = prev.findIndex((p) => p.id === player.id);
+      if (from === -1) return prev;
+      const to = Math.min(Math.max(desiredRank - 1, 0), prev.length - 1);
+      if (from === to) return prev;
+      const reranked = reorderAndRerank(prev, from, to);
+      persistRankRange(reranked, Math.min(from, to), Math.max(from, to));
+      return reranked;
+    });
+  }, []);
 
   function toggleTierBreak(afterGlobalIndex: number) {
     if (!isReorderable) return;
@@ -750,9 +839,9 @@ export default function PlayerBoard({
 
       {!isReorderable && (
         <p className="mb-3 text-xs text-gray-500">
-          Drag-to-reorder is disabled while filtering or searching — switch to
-          the ALL tab, clear the search, and turn off &ldquo;Hide
-          drafted&rdquo; to re-rank.
+          Dragging and rank editing are disabled while filtering or
+          searching — switch to the ALL tab, clear the search, and turn off
+          &ldquo;Hide drafted&rdquo; to re-rank.
         </p>
       )}
 
@@ -802,6 +891,7 @@ export default function PlayerBoard({
                       positionRank={positionalRanks.get(player.id) ?? null}
                       onToggleDrafted={toggleDrafted}
                       onToggleTag={toggleTag}
+                      onRankChange={handleRankChange}
                       onSelect={selectPlayer}
                     />
                   </Fragment>
